@@ -67,6 +67,13 @@ Content-Type:    application/json
     { "type": "image_url", "image_url": { "url": "https://example.com/photo.jpg" } }
   ]
 }
+
+// 4) image as a base64 data URL (e.g. a user upload)
+{
+  "input": [
+    { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgo..." } }
+  ]
+}
 ```
 
 ## Response shape
@@ -89,6 +96,12 @@ Content-Type:    application/json
 `flagged` is `true` when any category crosses the moderation threshold. Use the
 per-category booleans in `categories` (and the raw `category_scores`) to apply
 your own policy.
+
+## Rate limits
+
+Your plan defines a monthly request quota. When you exceed it the RapidAPI proxy
+returns **HTTP 429**. Check the response status and the optional `Retry-After`
+header, then back off and retry — every example in this repo does this for you.
 
 ## License
 
