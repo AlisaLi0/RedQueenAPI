@@ -1,94 +1,88 @@
 #!/usr/bin/env python3
-"""Moderate text and images with the NSFW Content Moderation API.
+"""RedQueen content moderation -- Python examples.
 
-    pip install requests
-    export RAPIDAPI_KEY="your-rapidapi-key"
-    python moderate.py
+Two complementary APIs share one RapidAPI key. Subscribe to whichever you need:
 
-Get your key: https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+  1) NSFW Content Moderation API  (fast, image-only safe/NSFW check)
+     host: nsfw-content-moderation-api.p.rapidapi.com
+     https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+
+  2) AI Content Moderation API    (reasoning LLM, text + image, 13 categories)
+     host: ai-content-moderation-api.p.rapidapi.com
+     https://rapidapi.com/bleujours/api/ai-content-moderation-api
+
+Usage:  RAPIDAPI_KEY=your-key python moderate.py
+Requires: requests  (pip install requests)
 """
-import base64
+import json
 import os
-import sys
 import time
 
 import requests
 
-HOST = "nsfw-content-moderation-api.p.rapidapi.com"
-BASE_URL = f"https://{HOST}"
+KEY = os.environ.get("RAPIDAPI_KEY")
+if not KEY:
+    raise SystemExit("Set RAPIDAPI_KEY to your RapidAPI key")
 
-API_KEY = os.environ.get("RAPIDAPI_KEY")
-if not API_KEY:
-    sys.exit("Set RAPIDAPI_KEY first (see https://rapidapi.com/bleujours/api/nsfw-content-moderation-api)")
+NSFW_HOST = "nsfw-content-moderation-api.p.rapidapi.com"
+AI_HOST = "ai-content-moderation-api.p.rapidapi.com"
 
-HEADERS = {
-    "X-RapidAPI-Key": API_KEY,
-    "X-RapidAPI-Host": HOST,
-    "Content-Type": "application/json",
-}
-
-# A 1x1 PNG. Swap in your own bytes (e.g. open("pic.jpg", "rb").read()).
-SAMPLE_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+# 1x1 transparent PNG, used for the base64 image example.
+SAMPLE_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGA"
+    "hKmMIQAAAABJRU5ErkJggg=="
 )
 
 
-def data_url(image_bytes, mime="image/png"):
-    """Turn raw image bytes into a base64 data URL the API accepts."""
-    b64 = base64.b64encode(image_bytes).decode()
-    return f"data:{mime};base64,{b64}"
-
-
-def request(method, path, payload=None, max_retries=3):
+def request(host, method, path, body=None, max_retries=3):
     """Call the API, retrying on HTTP 429 using the Retry-After header."""
+    url = f"https://{host}{path}"
+    headers = {
+        "X-RapidAPI-Key": KEY,
+        "X-RapidAPI-Host": host,
+        "Content-Type": "application/json",
+    }
     for attempt in range(max_retries + 1):
-        resp = requests.request(method, BASE_URL + path, headers=HEADERS, json=payload, timeout=30)
+        resp = requests.request(method, url, headers=headers, json=body, timeout=60)
         if resp.status_code == 429 and attempt < max_retries:
             wait = float(resp.headers.get("Retry-After", 2 ** attempt))
-            print(f"rate limited, retrying in {wait}s...", file=sys.stderr)
             time.sleep(wait)
             continue
         resp.raise_for_status()
         return resp.json()
+    resp.raise_for_status()
 
 
-def moderate(payload, path="/v1/moderations"):
-    return request("POST", path, payload)
+def show(label, data):
+    print(f"== {label} ==")
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+    print()
 
 
 def main():
-    # 0) Liveness + which model is serving.
-    print("health:", request("GET", "/health"))
-    print("models:", request("GET", "/v1/models"))
+    print("### Product 1 -- NSFW Content Moderation API (fast, image-only)\n")
+    show("health", request(NSFW_HOST, "GET", "/health"))
+    show("models", request(NSFW_HOST, "GET", "/v1/models"))
+    show("image by URL", request(NSFW_HOST, "POST", "/v1/moderations",
+         {"image_url": "https://picsum.photos/id/237/300/300"}))
+    show("image by base64 (/detect)", request(NSFW_HOST, "POST", "/detect",
+         {"image_b64": SAMPLE_PNG}))
+    # This API is image-only. Sending {"input": "text"} returns HTTP 400.
 
-    # 1) Moderate a single text string.
-    result = moderate({"input": "explicit hardcore content all night"})
-    first = result["results"][0]
-    print("flagged:", first["flagged"])
-    flagged_cats = [name for name, hit in first["categories"].items() if hit]
-    print("categories:", ", ".join(flagged_cats) or "(none)")
-
-    # 2) Batch of plain strings.
-    strings = moderate({"input": ["first message to check", "second message to check"]})
-    for i, item in enumerate(strings["results"]):
-        print(f"string {i}: flagged={item['flagged']}")
-
-    # 3) Mix text and an image URL (via the /detect alias).
-    batch = moderate(
-        {
-            "input": [
-                {"type": "text", "text": "I love baking bread with my grandmother"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
-            ]
-        },
-        path="/detect",
-    )
-    for i, item in enumerate(batch["results"]):
-        print(f"item {i} ({item['type']}): flagged={item['flagged']}")
-
-    # 4) Moderate a local image as a base64 data URL.
-    img = moderate({"input": [{"type": "image_url", "image_url": {"url": data_url(SAMPLE_PNG)}}]})
-    print("image flagged:", img["results"][0]["flagged"])
+    print("### Product 2 -- AI Content Moderation API (text + image, 13 cat)\n")
+    show("health", request(AI_HOST, "GET", "/health"))
+    show("models", request(AI_HOST, "GET", "/v1/models"))
+    show("single text", request(AI_HOST, "POST", "/v1/moderations",
+         {"input": "I will hunt you down and hurt you"}))
+    show("batch strings", request(AI_HOST, "POST", "/v1/moderations",
+         {"input": ["hello there", "explicit hardcore content all night"]}))
+    show("text + image (/detect)", request(AI_HOST, "POST", "/detect", {"input": [
+        {"type": "text", "text": "check this"},
+        {"type": "image_url", "image_url": {"url": "https://picsum.photos/id/237/300/300"}},
+    ]}))
+    show("image by base64 data URL", request(AI_HOST, "POST", "/v1/moderations", {"input": [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{SAMPLE_PNG}"}},
+    ]}))
 
 
 if __name__ == "__main__":

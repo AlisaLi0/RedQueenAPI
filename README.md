@@ -1,47 +1,43 @@
-# RedQueen NSFW Content Moderation API — Examples
+# RedQueen Content Moderation — Examples
 
-Ready-to-run code examples for the **NSFW Content Moderation API** on RapidAPI.
+Ready-to-run code examples for RedQueen's two content-moderation APIs on RapidAPI.
+Both share the same OpenAI-style surface and **one RapidAPI key** — subscribe to
+whichever fits your use case (or both).
 
-> 🔗 **Get your API key:** [NSFW Content Moderation API on RapidAPI](https://rapidapi.com/bleujours/api/nsfw-content-moderation-api)
-
-OpenAI-compatible content moderation for **text and images**. Classifies content
-across 13 safety categories (sexual, hate, harassment, self-harm, violence,
-illicit and more) and returns per-category boolean flags plus confidence scores.
-A drop-in replacement for the OpenAI `/v1/moderations` endpoint — ideal for
-filtering user-generated content on forums, social platforms and UGC apps.
+| # | API | Best for | Listing |
+| - | --- | -------- | ------- |
+| 1 | **NSFW Content Moderation API** | Fast, cheap, **image-only** safe/NSFW check | [nsfw-content-moderation-api](https://rapidapi.com/bleujours/api/nsfw-content-moderation-api) |
+| 2 | **AI Content Moderation API** | Reasoning LLM, **text + images**, 13 categories | [ai-content-moderation-api](https://rapidapi.com/bleujours/api/ai-content-moderation-api) |
 
 ## Quick start
 
-1. Subscribe (free tier available) and grab your key from the
-   [RapidAPI listing](https://rapidapi.com/bleujours/api/nsfw-content-moderation-api).
+1. Subscribe (free tier available) to one or both APIs and grab your key.
 2. Set it as an environment variable:
 
    ```bash
    export RAPIDAPI_KEY="your-rapidapi-key"
    ```
 
-3. Pick your language below and run the example.
+3. Pick your language below and run the example. Each example exercises **both**
+   APIs end to end.
 
-| Language   | File                                         |
-| ---------- | -------------------------------------------- |
-| cURL       | [curl/moderate.sh](curl/moderate.sh)         |
-| Python     | [python/moderate.py](python/moderate.py)     |
-| JavaScript | [javascript/moderate.js](javascript/moderate.js) |
-| PHP        | [php/moderate.php](php/moderate.php)         |
-| Go         | [go/main.go](go/main.go)                     |
+| Language   | File                                              |
+| ---------- | ------------------------------------------------- |
+| cURL       | [curl/moderate.sh](curl/moderate.sh)              |
+| Python     | [python/moderate.py](python/moderate.py)          |
+| JavaScript | [javascript/moderate.js](javascript/moderate.js)  |
+| PHP        | [php/moderate.php](php/moderate.php)              |
+| Go         | [go/main.go](go/main.go)                          |
 
-## Endpoints
+---
 
-| Method | Path               | Description                                   |
-| ------ | ------------------ | --------------------------------------------- |
-| `POST` | `/v1/moderations`  | Moderate one or more text and/or image inputs |
-| `POST` | `/detect`          | Friendly alias of `/v1/moderations`           |
-| `GET`  | `/v1/models`       | List the moderation model and capabilities    |
-| `GET`  | `/health`          | Liveness + upstream status                     |
+## 1) NSFW Content Moderation API — fast, image-only
 
-Base URL (via RapidAPI proxy): `https://nsfw-content-moderation-api.p.rapidapi.com`
+A lightweight vision classifier that returns a binary safe/NSFW verdict with a
+confidence score in milliseconds. **Image input only** — sending text returns
+HTTP `400`.
 
-Required headers on every request:
+Base URL: `https://nsfw-content-moderation-api.p.rapidapi.com`
 
 ```
 X-RapidAPI-Key:  <your key>
@@ -49,9 +45,63 @@ X-RapidAPI-Host: nsfw-content-moderation-api.p.rapidapi.com
 Content-Type:    application/json
 ```
 
-## Request shape
+| Method | Path              | Description                                  |
+| ------ | ----------------- | -------------------------------------------- |
+| `POST` | `/v1/moderations` | Moderate one image (`image_url`/`image_b64`) |
+| `POST` | `/detect`         | Friendly alias of `/v1/moderations`          |
+| `GET`  | `/v1/models`      | Model id and capabilities                    |
+| `GET`  | `/health`         | Liveness + upstream status                   |
 
-`input` accepts a string, an array of strings, or an array of typed content parts:
+**Request** — an image URL or base64-encoded bytes:
+
+```jsonc
+{ "image_url": "https://example.com/photo.jpg" }
+// or
+{ "image_b64": "iVBORw0KGgo..." }
+```
+
+**Response:**
+
+```jsonc
+{
+  "id": "modr-ea4bc9e9370a45688120002b",
+  "model": "redqueen-moderation-001-fast",
+  "results": [
+    {
+      "flagged": false,
+      "type": "image",
+      "nsfw_score": 0.000195,
+      "category_scores": { "normal": 0.999806, "nsfw": 0.000195 }
+    }
+  ],
+  "latency_ms": 41
+}
+```
+
+---
+
+## 2) AI Content Moderation API — text + image, 13 categories
+
+A reasoning LLM (Qwen3.6) that classifies **text and/or images** across 13 safety
+categories and returns per-category booleans plus confidence scores. Drop-in
+compatible with the OpenAI `/v1/moderations` shape.
+
+Base URL: `https://ai-content-moderation-api.p.rapidapi.com`
+
+```
+X-RapidAPI-Key:  <your key>
+X-RapidAPI-Host: ai-content-moderation-api.p.rapidapi.com
+Content-Type:    application/json
+```
+
+| Method | Path              | Description                                   |
+| ------ | ----------------- | --------------------------------------------- |
+| `POST` | `/v1/moderations` | Moderate one or more text and/or image inputs |
+| `POST` | `/detect`         | Friendly alias of `/v1/moderations`           |
+| `GET`  | `/v1/models`      | Model id and capabilities                     |
+| `GET`  | `/health`         | Liveness + upstream status                    |
+
+**Request** — `input` accepts a string, an array of strings, or typed parts:
 
 ```jsonc
 // 1) single string
@@ -76,30 +126,36 @@ Content-Type:    application/json
 }
 ```
 
-## Response shape
+**Response** — `categories` and `category_scores` always include all 13 keys:
 
 ```jsonc
 {
-  "id": "modr-1a2b3c4d5e6f7a8b9c0d1e2f",
+  "id": "modr-f00de6539efc4afa83dbed1b",
   "model": "redqueen-moderation-001",
   "results": [
     {
       "flagged": true,
       "type": "text",
-      "categories": { "sexual": true, "violence": false, "hate": false /* … */ },
-      "category_scores": { "sexual": 0.98, "violence": 0.01, "hate": 0.00 /* … */ }
+      "categories": { "harassment": true, "harassment/threatening": true, "violence": true /* … */ },
+      "category_scores": { "harassment": 0.7, "harassment/threatening": 0.8, "violence": 0.6 /* … */ }
     }
   ]
 }
 ```
 
+The 13 categories: `sexual`, `sexual/minors`, `harassment`, `harassment/threatening`,
+`hate`, `hate/threatening`, `illicit`, `illicit/violent`, `self-harm`,
+`self-harm/intent`, `self-harm/instructions`, `violence`, `violence/graphic`.
+
 `flagged` is `true` when any category crosses the moderation threshold. Use the
 per-category booleans in `categories` (and the raw `category_scores`) to apply
 your own policy.
 
+---
+
 ## Rate limits
 
-Your plan defines a monthly request quota. When you exceed it the RapidAPI proxy
+Each plan defines a monthly request quota. When you exceed it the RapidAPI proxy
 returns **HTTP 429**. Check the response status and the optional `Retry-After`
 header, then back off and retry — every example in this repo does this for you.
 

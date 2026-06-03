@@ -1,102 +1,101 @@
 <?php
-// Moderate text and images with the NSFW Content Moderation API.
-//
-//   export RAPIDAPI_KEY="your-rapidapi-key"
-//   php moderate.php
-//
-// Get your key: https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+/*
+ * RedQueen content moderation -- PHP examples.
+ *
+ * Two complementary APIs share one RapidAPI key. Subscribe to whichever you need:
+ *
+ *   1) NSFW Content Moderation API  (fast, image-only safe/NSFW check)
+ *      host: nsfw-content-moderation-api.p.rapidapi.com
+ *      https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+ *
+ *   2) AI Content Moderation API    (reasoning LLM, text + image, 13 categories)
+ *      host: ai-content-moderation-api.p.rapidapi.com
+ *      https://rapidapi.com/bleujours/api/ai-content-moderation-api
+ *
+ * Usage:  RAPIDAPI_KEY=your-key php moderate.php
+ * Requires the cURL extension (ext-curl).
+ */
 
-$host = "nsfw-content-moderation-api.p.rapidapi.com";
-$baseUrl = "https://{$host}";
-
-$apiKey = getenv("RAPIDAPI_KEY");
-if (!$apiKey) {
-    fwrite(STDERR, "Set RAPIDAPI_KEY first (see the RapidAPI listing).\n");
+$KEY = getenv('RAPIDAPI_KEY');
+if (!$KEY) {
+    fwrite(STDERR, "Set RAPIDAPI_KEY to your RapidAPI key\n");
     exit(1);
 }
 
-// A 1x1 PNG. Swap in your own bytes (e.g. file_get_contents("pic.jpg")).
-$samplePng = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+const NSFW_HOST = 'nsfw-content-moderation-api.p.rapidapi.com';
+const AI_HOST   = 'ai-content-moderation-api.p.rapidapi.com';
 
-// Build a base64 data URL the API accepts from raw bytes.
-function dataUrl($bytes, $mime = "image/png") {
-    return "data:{$mime};base64," . base64_encode($bytes);
-}
+// 1x1 transparent PNG, used for the base64 image example.
+const SAMPLE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-// Call the API, retrying on HTTP 429 using the Retry-After header.
-function apiRequest($method, $baseUrl, $host, $apiKey, $path, $payload = null, $maxRetries = 3) {
+function api_request(string $host, string $method, string $path, ?array $body = null, int $maxRetries = 3) {
+    global $KEY;
+    $url = "https://{$host}{$path}";
     for ($attempt = 0; ; $attempt++) {
-        $ch = curl_init($baseUrl . $path);
-        $opts = [
-            CURLOPT_CUSTOMREQUEST => $method,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true,
-            CURLOPT_HTTPHEADER => [
-                "X-RapidAPI-Key: {$apiKey}",
-                "X-RapidAPI-Host: {$host}",
-                "Content-Type: application/json",
-            ],
+        $ch = curl_init($url);
+        $headers = [
+            "X-RapidAPI-Key: {$KEY}",
+            "X-RapidAPI-Host: {$host}",
+            'Content-Type: application/json',
         ];
-        if ($payload !== null) {
-            $opts[CURLOPT_POSTFIELDS] = json_encode($payload);
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST  => $method,
+            CURLOPT_HTTPHEADER     => $headers,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => 60,
+        ]);
+        if ($body !== null) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
         }
-        curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
-        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $hsize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         curl_close($ch);
 
-        $rawHeaders = substr($raw, 0, $headerSize);
-        $body = substr($raw, $headerSize);
+        $rawHeaders = substr($raw, 0, $hsize);
+        $bodyText = substr($raw, $hsize);
 
         if ($status === 429 && $attempt < $maxRetries) {
-            preg_match('/retry-after:\s*(\d+)/i', $rawHeaders, $m);
-            $wait = isset($m[1]) ? (int)$m[1] : (1 << $attempt);
-            fwrite(STDERR, "rate limited, retrying in {$wait}s...\n");
+            $wait = 2 ** $attempt;
+            if (preg_match('/retry-after:\s*(\d+)/i', $rawHeaders, $m)) {
+                $wait = (int) $m[1];
+            }
             sleep($wait);
             continue;
         }
-        if ($status !== 200) {
-            throw new Exception("HTTP {$status}: {$body}");
+        if ($status >= 400) {
+            throw new RuntimeException("HTTP {$status}: {$bodyText}");
         }
-        return json_decode($body, true);
+        return json_decode($bodyText, true);
     }
 }
 
-function moderate($baseUrl, $host, $apiKey, $payload, $path = "/v1/moderations") {
-    return apiRequest("POST", $baseUrl, $host, $apiKey, $path, $payload);
+function show(string $label, $data): void {
+    echo "== {$label} ==\n";
+    echo json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n\n";
 }
 
-// 0) Liveness + which model is serving.
-echo "health: " . json_encode(apiRequest("GET", $baseUrl, $host, $apiKey, "/health")) . "\n";
-echo "models: " . json_encode(apiRequest("GET", $baseUrl, $host, $apiKey, "/v1/models")) . "\n";
+echo "### Product 1 -- NSFW Content Moderation API (fast, image-only)\n\n";
+show('health', api_request(NSFW_HOST, 'GET', '/health'));
+show('models', api_request(NSFW_HOST, 'GET', '/v1/models'));
+show('image by URL', api_request(NSFW_HOST, 'POST', '/v1/moderations',
+    ['image_url' => 'https://picsum.photos/id/237/300/300']));
+show('image by base64 (/detect)', api_request(NSFW_HOST, 'POST', '/detect',
+    ['image_b64' => SAMPLE_PNG]));
+// This API is image-only. Sending ['input' => 'text'] returns HTTP 400.
 
-// 1) Moderate a single text string.
-$result = moderate($baseUrl, $host, $apiKey, ["input" => "explicit hardcore content all night"]);
-$first = $result["results"][0];
-echo "flagged: " . ($first["flagged"] ? "true" : "false") . "\n";
-$flagged = array_keys(array_filter($first["categories"]));
-echo "categories: " . (implode(", ", $flagged) ?: "(none)") . "\n";
-
-// 2) Batch of plain strings.
-$strings = moderate($baseUrl, $host, $apiKey, ["input" => ["first message to check", "second message to check"]]);
-foreach ($strings["results"] as $i => $item) {
-    echo "string {$i}: flagged=" . ($item["flagged"] ? "true" : "false") . "\n";
-}
-
-// 3) Mix text and an image URL (via the /detect alias).
-$batch = moderate($baseUrl, $host, $apiKey, [
-    "input" => [
-        ["type" => "text", "text" => "I love baking bread with my grandmother"],
-        ["type" => "image_url", "image_url" => ["url" => "https://example.com/photo.jpg"]],
-    ],
-], "/detect");
-foreach ($batch["results"] as $i => $item) {
-    echo "item {$i} ({$item['type']}): flagged=" . ($item["flagged"] ? "true" : "false") . "\n";
-}
-
-// 4) Moderate a local image as a base64 data URL.
-$img = moderate($baseUrl, $host, $apiKey, [
-    "input" => [["type" => "image_url", "image_url" => ["url" => dataUrl($samplePng)]]],
-]);
-echo "image flagged: " . ($img["results"][0]["flagged"] ? "true" : "false") . "\n";
+echo "### Product 2 -- AI Content Moderation API (text + image, 13 cat)\n\n";
+show('health', api_request(AI_HOST, 'GET', '/health'));
+show('models', api_request(AI_HOST, 'GET', '/v1/models'));
+show('single text', api_request(AI_HOST, 'POST', '/v1/moderations',
+    ['input' => 'I will hunt you down and hurt you']));
+show('batch strings', api_request(AI_HOST, 'POST', '/v1/moderations',
+    ['input' => ['hello there', 'explicit hardcore content all night']]));
+show('text + image (/detect)', api_request(AI_HOST, 'POST', '/detect', ['input' => [
+    ['type' => 'text', 'text' => 'check this'],
+    ['type' => 'image_url', 'image_url' => ['url' => 'https://picsum.photos/id/237/300/300']],
+]]));
+show('image by base64 data URL', api_request(AI_HOST, 'POST', '/v1/moderations', ['input' => [
+    ['type' => 'image_url', 'image_url' => ['url' => 'data:image/png;base64,' . SAMPLE_PNG]],
+]]));

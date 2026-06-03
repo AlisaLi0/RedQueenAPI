@@ -1,14 +1,20 @@
-// Moderate text and images with the NSFW Content Moderation API.
+// RedQueen content moderation -- Go examples.
 //
-//	export RAPIDAPI_KEY="your-rapidapi-key"
-//	go run main.go
+// Two complementary APIs share one RapidAPI key. Subscribe to whichever you need:
 //
-// Get your key: https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+//	1) NSFW Content Moderation API  (fast, image-only safe/NSFW check)
+//	   host: nsfw-content-moderation-api.p.rapidapi.com
+//	   https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+//
+//	2) AI Content Moderation API    (reasoning LLM, text + image, 13 categories)
+//	   host: ai-content-moderation-api.p.rapidapi.com
+//	   https://rapidapi.com/bleujours/api/ai-content-moderation-api
+//
+// Usage:  RAPIDAPI_KEY=your-key go run main.go
 package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,141 +24,106 @@ import (
 	"time"
 )
 
-const host = "nsfw-content-moderation-api.p.rapidapi.com"
-const baseURL = "https://" + host
+const (
+	nsfwHost = "nsfw-content-moderation-api.p.rapidapi.com"
+	aiHost   = "ai-content-moderation-api.p.rapidapi.com"
+	// samplePNG is a 1x1 transparent PNG used for the base64 image example.
+	samplePNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
-// A 1x1 PNG. Swap in your own bytes (e.g. os.ReadFile("pic.jpg")).
-const samplePNGB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+var key = os.Getenv("RAPIDAPI_KEY")
 
-type moderationResponse struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Results []struct {
-		Flagged    bool            `json:"flagged"`
-		Type       string          `json:"type"`
-		Categories map[string]bool `json:"categories"`
-	} `json:"results"`
-}
-
-var client = &http.Client{Timeout: 30 * time.Second}
-
-// dataURL builds a base64 data URL the API accepts from raw image bytes.
-func dataURL(b []byte, mime string) string {
-	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b)
-}
-
-// apiRequest calls the API, retrying on HTTP 429 using the Retry-After header.
-func apiRequest(apiKey, method, path string, payload any) ([]byte, error) {
-	const maxRetries = 3
+func apiRequest(host, method, path string, body any) (map[string]any, error) {
+	url := "https://" + host + path
+	maxRetries := 3
 	for attempt := 0; ; attempt++ {
 		var reader io.Reader
-		if payload != nil {
-			body, _ := json.Marshal(payload)
-			reader = bytes.NewReader(body)
+		if body != nil {
+			b, err := json.Marshal(body)
+			if err != nil {
+				return nil, err
+			}
+			reader = bytes.NewReader(b)
 		}
-		req, err := http.NewRequest(method, baseURL+path, reader)
+		req, err := http.NewRequest(method, url, reader)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("X-RapidAPI-Key", apiKey)
+		req.Header.Set("X-RapidAPI-Key", key)
 		req.Header.Set("X-RapidAPI-Host", host)
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := client.Do(req)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
-		raw, _ := io.ReadAll(resp.Body)
+		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries {
 			wait := 1 << attempt
-			if ra, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil {
-				wait = ra
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if n, err := strconv.Atoi(ra); err == nil {
+					wait = n
+				}
 			}
-			fmt.Fprintf(os.Stderr, "rate limited, retrying in %ds...\n", wait)
 			time.Sleep(time.Duration(wait) * time.Second)
 			continue
 		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, raw)
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
 		}
-		return raw, nil
+		var out map[string]any
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
 	}
 }
 
-func moderate(apiKey string, payload any, path string) (*moderationResponse, error) {
-	raw, err := apiRequest(apiKey, http.MethodPost, path, payload)
+func show(label string, data map[string]any, err error) {
 	if err != nil {
-		return nil, err
+		fmt.Printf("== %s == ERROR: %v\n\n", label, err)
+		return
 	}
-	var out moderationResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func must(label string, v *moderationResponse, err error) *moderationResponse {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, label, err)
-		os.Exit(1)
-	}
-	return v
+	pretty, _ := json.MarshalIndent(data, "", "  ")
+	fmt.Printf("== %s ==\n%s\n\n", label, pretty)
 }
 
 func main() {
-	apiKey := os.Getenv("RAPIDAPI_KEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "Set RAPIDAPI_KEY first (see the RapidAPI listing).")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "Set RAPIDAPI_KEY to your RapidAPI key")
 		os.Exit(1)
 	}
 
-	// 0) Liveness + which model is serving.
-	if raw, err := apiRequest(apiKey, http.MethodGet, "/health", nil); err == nil {
-		fmt.Println("health:", string(raw))
-	}
-	if raw, err := apiRequest(apiKey, http.MethodGet, "/v1/models", nil); err == nil {
-		fmt.Println("models:", string(raw))
-	}
+	fmt.Println("### Product 1 -- NSFW Content Moderation API (fast, image-only)")
+	fmt.Println()
+	show(show3(apiRequest(nsfwHost, "GET", "/health", nil), "health"))
+	show(show3(apiRequest(nsfwHost, "GET", "/v1/models", nil), "models"))
+	show(show3(apiRequest(nsfwHost, "POST", "/v1/moderations",
+		map[string]any{"image_url": "https://picsum.photos/id/237/300/300"}), "image by URL"))
+	show(show3(apiRequest(nsfwHost, "POST", "/detect",
+		map[string]any{"image_b64": samplePNG}), "image by base64 (/detect)"))
+	// This API is image-only. Sending {"input":"text"} returns HTTP 400.
 
-	// 1) Moderate a single text string.
-	result := must("single:", moderate(apiKey, map[string]any{
-		"input": "explicit hardcore content all night",
-	}, "/v1/moderations"))
-	first := result.Results[0]
-	fmt.Println("flagged:", first.Flagged)
-	for name, hit := range first.Categories {
-		if hit {
-			fmt.Println("category:", name)
-		}
-	}
+	fmt.Println("### Product 2 -- AI Content Moderation API (text + image, 13 cat)")
+	fmt.Println()
+	show(show3(apiRequest(aiHost, "GET", "/health", nil), "health"))
+	show(show3(apiRequest(aiHost, "GET", "/v1/models", nil), "models"))
+	show(show3(apiRequest(aiHost, "POST", "/v1/moderations",
+		map[string]any{"input": "I will hunt you down and hurt you"}), "single text"))
+	show(show3(apiRequest(aiHost, "POST", "/v1/moderations",
+		map[string]any{"input": []string{"hello there", "explicit hardcore content all night"}}), "batch strings"))
+	show(show3(apiRequest(aiHost, "POST", "/detect", map[string]any{"input": []any{
+		map[string]any{"type": "text", "text": "check this"},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://picsum.photos/id/237/300/300"}},
+	}}), "text + image (/detect)"))
+	show(show3(apiRequest(aiHost, "POST", "/v1/moderations", map[string]any{"input": []any{
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + samplePNG}},
+	}}), "image by base64 data URL"))
+}
 
-	// 2) Batch of plain strings.
-	strings := must("strings:", moderate(apiKey, map[string]any{
-		"input": []any{"first message to check", "second message to check"},
-	}, "/v1/moderations"))
-	for i, item := range strings.Results {
-		fmt.Printf("string %d: flagged=%v\n", i, item.Flagged)
-	}
-
-	// 3) Mix text and an image URL (via the /detect alias).
-	batch := must("batch:", moderate(apiKey, map[string]any{
-		"input": []any{
-			map[string]any{"type": "text", "text": "I love baking bread with my grandmother"},
-			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/photo.jpg"}},
-		},
-	}, "/detect"))
-	for i, item := range batch.Results {
-		fmt.Printf("item %d (%s): flagged=%v\n", i, item.Type, item.Flagged)
-	}
-
-	// 4) Moderate a local image as a base64 data URL.
-	png, _ := base64.StdEncoding.DecodeString(samplePNGB64)
-	img := must("image:", moderate(apiKey, map[string]any{
-		"input": []any{
-			map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL(png, "image/png")}},
-		},
-	}, "/v1/moderations"))
-	fmt.Println("image flagged:", img.Results[0].Flagged)
+// show3 adapts (data, err) plus a label into the argument order show expects.
+func show3(data map[string]any, err error, label string) (string, map[string]any, error) {
+	return label, data, err
 }

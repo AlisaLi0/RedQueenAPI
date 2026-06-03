@@ -1,58 +1,77 @@
 #!/usr/bin/env bash
-# Moderate text and images with the NSFW Content Moderation API.
 #
-#   export RAPIDAPI_KEY="your-rapidapi-key"
-#   ./moderate.sh
+# RedQueen content moderation — curl examples
 #
-# Get your key: https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+# Two complementary APIs share one RapidAPI key. Subscribe to whichever you need:
+#
+#   1) NSFW Content Moderation API  (fast, image-only safe/NSFW check)
+#      host: nsfw-content-moderation-api.p.rapidapi.com
+#      https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+#
+#   2) AI Content Moderation API    (reasoning LLM, text + image, 13 categories)
+#      host: ai-content-moderation-api.p.rapidapi.com
+#      https://rapidapi.com/bleujours/api/ai-content-moderation-api
+#
+# Usage:  RAPIDAPI_KEY=your-key ./moderate.sh
 set -euo pipefail
 
-: "${RAPIDAPI_KEY:?Set RAPIDAPI_KEY first}"
-HOST="nsfw-content-moderation-api.p.rapidapi.com"
+KEY="${RAPIDAPI_KEY:?Set RAPIDAPI_KEY to your RapidAPI key}"
+NSFW_HOST="nsfw-content-moderation-api.p.rapidapi.com"
+AI_HOST="ai-content-moderation-api.p.rapidapi.com"
 
-auth=(-H "X-RapidAPI-Key: ${RAPIDAPI_KEY}" -H "X-RapidAPI-Host: ${HOST}")
-json=(-H "Content-Type: application/json")
+# 1x1 transparent PNG, used for the base64 image example.
+SAMPLE_PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
-# --- 1) Health check ------------------------------------------------------
-echo "# health"
-curl -s "${auth[@]}" "https://${HOST}/health"
+nsfw() { curl -sS "https://${NSFW_HOST}$1" -H "X-RapidAPI-Key: ${KEY}" -H "X-RapidAPI-Host: ${NSFW_HOST}" "${@:2}"; echo; }
+ai()   { curl -sS "https://${AI_HOST}$1"   -H "X-RapidAPI-Key: ${KEY}" -H "X-RapidAPI-Host: ${AI_HOST}"   "${@:2}"; echo; }
+
+echo "############################################################"
+echo "# Product 1 — NSFW Content Moderation API (fast, image-only)"
+echo "############################################################"
+
+echo "== GET /health =="
+nsfw /health
+
+echo "== GET /v1/models =="
+nsfw /v1/models
+
+echo "== POST /v1/moderations  (image by URL) =="
+nsfw /v1/moderations -X POST -H 'Content-Type: application/json' \
+  -d '{"image_url":"https://picsum.photos/id/237/300/300"}'
+
+echo "== POST /detect  (image by base64) =="
+nsfw /detect -X POST -H 'Content-Type: application/json' \
+  -d "{\"image_b64\":\"${SAMPLE_PNG}\"}"
+# Returns: {"results":[{"flagged":false,"type":"image","nsfw_score":0.0002,
+#                       "category_scores":{"normal":0.9998,"nsfw":0.0002}}]}
+# NOTE: this API is image-only. Sending {"input":"some text"} returns HTTP 400.
+
 echo
+echo "############################################################"
+echo "# Product 2 — AI Content Moderation API (text + image, 13 cat)"
+echo "############################################################"
 
-# --- 2) List the moderation model -----------------------------------------
-echo "# models"
-curl -s "${auth[@]}" "https://${HOST}/v1/models"
-echo
+echo "== GET /health =="
+ai /health
 
-# --- 3) Moderate a single text string -------------------------------------
-echo "# single text"
-curl -s -X POST "https://${HOST}/v1/moderations" "${auth[@]}" "${json[@]}" \
-  -d '{"input": "explicit hardcore content all night"}'
-echo
+echo "== GET /v1/models =="
+ai /v1/models
 
-# --- 4) Batch of plain strings --------------------------------------------
-echo "# batch strings"
-curl -s -X POST "https://${HOST}/v1/moderations" "${auth[@]}" "${json[@]}" \
-  -d '{"input": ["first message to check", "second message to check"]}'
-echo
+echo "== POST /v1/moderations  (single text) =="
+ai /v1/moderations -X POST -H 'Content-Type: application/json' \
+  -d '{"input":"I will hunt you down and hurt you"}'
 
-# --- 5) Mixed text + image URL via the /detect alias ----------------------
-echo "# text + image url"
-curl -s -X POST "https://${HOST}/detect" "${auth[@]}" "${json[@]}" \
-  -d '{
-        "input": [
-          { "type": "text", "text": "I love baking bread with my grandmother" },
-          { "type": "image_url", "image_url": { "url": "https://example.com/photo.jpg" } }
-        ]
-      }'
-echo
+echo "== POST /v1/moderations  (batch: array of strings) =="
+ai /v1/moderations -X POST -H 'Content-Type: application/json' \
+  -d '{"input":["hello there","explicit hardcore content all night"]}'
 
-# --- 6) Image as a base64 data URL (e.g. a user upload) -------------------
-# data:<mime>;base64,<...>  — swap in your own image bytes.
-echo "# base64 image"
-IMG_DATA_URL="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-curl -s -X POST "https://${HOST}/v1/moderations" "${auth[@]}" "${json[@]}" \
-  -d "{\"input\": [{\"type\": \"image_url\", \"image_url\": {\"url\": \"${IMG_DATA_URL}\"}}]}"
-echo
+echo "== POST /detect  (text + image in one call) =="
+ai /detect -X POST -H 'Content-Type: application/json' \
+  -d '{"input":[{"type":"text","text":"check this"},{"type":"image_url","image_url":{"url":"https://picsum.photos/id/237/300/300"}}]}'
 
-# Note on rate limits: when you exceed your plan quota the proxy returns
-# HTTP 429. Inspect the response status and the Retry-After header, then back off.
+echo "== POST /v1/moderations  (image by base64 data URL) =="
+ai /v1/moderations -X POST -H 'Content-Type: application/json' \
+  -d "{\"input\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${SAMPLE_PNG}\"}}]}"
+# Returns 13-category categories{} + category_scores{} per result.
+
+# Rate limits: on HTTP 429, back off and retry using the Retry-After header.

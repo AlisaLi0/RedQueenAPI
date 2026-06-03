@@ -1,100 +1,99 @@
-// Moderate text and images with the NSFW Content Moderation API.
-//
-//   export RAPIDAPI_KEY="your-rapidapi-key"
-//   node moderate.js
-//
-// Node 18+ (built-in fetch). Get your key:
-// https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
-
-const HOST = "nsfw-content-moderation-api.p.rapidapi.com";
-const BASE_URL = `https://${HOST}`;
-
-const API_KEY = process.env.RAPIDAPI_KEY;
-if (!API_KEY) {
-  console.error("Set RAPIDAPI_KEY first (see the RapidAPI listing).");
+#!/usr/bin/env node
+/*
+ * RedQueen content moderation -- JavaScript (Node 18+) examples.
+ *
+ * Two complementary APIs share one RapidAPI key. Subscribe to whichever you need:
+ *
+ *   1) NSFW Content Moderation API  (fast, image-only safe/NSFW check)
+ *      host: nsfw-content-moderation-api.p.rapidapi.com
+ *      https://rapidapi.com/bleujours/api/nsfw-content-moderation-api
+ *
+ *   2) AI Content Moderation API    (reasoning LLM, text + image, 13 categories)
+ *      host: ai-content-moderation-api.p.rapidapi.com
+ *      https://rapidapi.com/bleujours/api/ai-content-moderation-api
+ *
+ * Usage:  RAPIDAPI_KEY=your-key node moderate.js
+ * Node 18+ has a built-in global fetch.
+ */
+const KEY = process.env.RAPIDAPI_KEY;
+if (!KEY) {
+  console.error("Set RAPIDAPI_KEY to your RapidAPI key");
   process.exit(1);
 }
 
-const headers = {
-  "X-RapidAPI-Key": API_KEY,
-  "X-RapidAPI-Host": HOST,
-  "Content-Type": "application/json",
-};
+const NSFW_HOST = "nsfw-content-moderation-api.p.rapidapi.com";
+const AI_HOST = "ai-content-moderation-api.p.rapidapi.com";
 
-// A 1x1 PNG. Swap in your own bytes (e.g. fs.readFileSync("pic.jpg")).
-const SAMPLE_PNG_B64 =
+// 1x1 transparent PNG, used for the base64 image example.
+const SAMPLE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Build a base64 data URL the API accepts from raw bytes.
-function dataUrl(base64, mime = "image/png") {
-  return `data:${mime};base64,${base64}`;
-}
-
-// Call the API, retrying on HTTP 429 using the Retry-After header.
-async function request(method, path, payload, maxRetries = 3) {
+async function request(host, method, path, body, maxRetries = 3) {
+  const url = `https://${host}${path}`;
+  const headers = {
+    "X-RapidAPI-Key": KEY,
+    "X-RapidAPI-Host": host,
+    "Content-Type": "application/json",
+  };
   for (let attempt = 0; ; attempt++) {
-    const resp = await fetch(BASE_URL + path, {
+    const resp = await fetch(url, {
       method,
       headers,
-      body: payload ? JSON.stringify(payload) : undefined,
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (resp.status === 429 && attempt < maxRetries) {
       const wait = Number(resp.headers.get("Retry-After")) || 2 ** attempt;
-      console.error(`rate limited, retrying in ${wait}s...`);
       await sleep(wait * 1000);
       continue;
     }
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
     return resp.json();
   }
 }
 
-const moderate = (payload, path = "/v1/moderations") => request("POST", path, payload);
-
-async function main() {
-  // 0) Liveness + which model is serving.
-  console.log("health:", await request("GET", "/health"));
-  console.log("models:", await request("GET", "/v1/models"));
-
-  // 1) Moderate a single text string.
-  const result = await moderate({ input: "explicit hardcore content all night" });
-  const first = result.results[0];
-  console.log("flagged:", first.flagged);
-  const flagged = Object.entries(first.categories)
-    .filter(([, hit]) => hit)
-    .map(([name]) => name);
-  console.log("categories:", flagged.join(", ") || "(none)");
-
-  // 2) Batch of plain strings.
-  const strings = await moderate({ input: ["first message to check", "second message to check"] });
-  strings.results.forEach((item, i) => console.log(`string ${i}: flagged=${item.flagged}`));
-
-  // 3) Mix text and an image URL (via the /detect alias).
-  const batch = await moderate(
-    {
-      input: [
-        { type: "text", text: "I love baking bread with my grandmother" },
-        { type: "image_url", image_url: { url: "https://example.com/photo.jpg" } },
-      ],
-    },
-    "/detect"
-  );
-  batch.results.forEach((item, i) => {
-    console.log(`item ${i} (${item.type}): flagged=${item.flagged}`);
-  });
-
-  // 4) Moderate a local image as a base64 data URL.
-  const img = await moderate({
-    input: [{ type: "image_url", image_url: { url: dataUrl(SAMPLE_PNG_B64) } }],
-  });
-  console.log("image flagged:", img.results[0].flagged);
+async function show(label, p) {
+  console.log(`== ${label} ==`);
+  console.log(JSON.stringify(await p, null, 2));
+  console.log();
 }
 
-main().catch((err) => {
-  console.error(err);
+async function main() {
+  console.log("### Product 1 -- NSFW Content Moderation API (fast, image-only)\n");
+  await show("health", request(NSFW_HOST, "GET", "/health"));
+  await show("models", request(NSFW_HOST, "GET", "/v1/models"));
+  await show("image by URL", request(NSFW_HOST, "POST", "/v1/moderations", {
+    image_url: "https://picsum.photos/id/237/300/300",
+  }));
+  await show("image by base64 (/detect)", request(NSFW_HOST, "POST", "/detect", {
+    image_b64: SAMPLE_PNG,
+  }));
+  // This API is image-only. Sending {input: "text"} returns HTTP 400.
+
+  console.log("### Product 2 -- AI Content Moderation API (text + image, 13 cat)\n");
+  await show("health", request(AI_HOST, "GET", "/health"));
+  await show("models", request(AI_HOST, "GET", "/v1/models"));
+  await show("single text", request(AI_HOST, "POST", "/v1/moderations", {
+    input: "I will hunt you down and hurt you",
+  }));
+  await show("batch strings", request(AI_HOST, "POST", "/v1/moderations", {
+    input: ["hello there", "explicit hardcore content all night"],
+  }));
+  await show("text + image (/detect)", request(AI_HOST, "POST", "/detect", {
+    input: [
+      { type: "text", text: "check this" },
+      { type: "image_url", image_url: { url: "https://picsum.photos/id/237/300/300" } },
+    ],
+  }));
+  await show("image by base64 data URL", request(AI_HOST, "POST", "/v1/moderations", {
+    input: [
+      { type: "image_url", image_url: { url: `data:image/png;base64,${SAMPLE_PNG}` } },
+    ],
+  }));
+}
+
+main().catch((e) => {
+  console.error(e);
   process.exit(1);
 });
